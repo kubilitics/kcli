@@ -223,6 +223,93 @@ func hasWithModifier(args []string) bool {
 	return false
 }
 
+// enhanceableResources is the set of resource types that kcli can render with
+// beautiful colored tables via client-go (instead of plain kubectl passthrough).
+var enhanceableResources = map[string]bool{
+	"pod": true, "pods": true, "po": true,
+	"deployment": true, "deployments": true, "deploy": true,
+	"service": true, "services": true, "svc": true,
+	"node": true, "nodes": true,
+	"statefulset": true, "statefulsets": true, "sts": true,
+	"daemonset": true, "daemonsets": true, "ds": true,
+	"persistentvolume": true, "persistentvolumes": true, "pv": true,
+	"persistentvolumeclaim": true, "persistentvolumeclaims": true, "pvc": true,
+	"ingress": true, "ingresses": true, "ing": true,
+	"event": true, "events": true, "ev": true,
+}
+
+// shouldUseEnhancedGet returns true when args represent a simple resource list
+// that kcli can render beautifully (TTY, enhanceable resource, default table output,
+// no watch, no specific resource name like pods/my-pod).
+func shouldUseEnhancedGet(args []string) bool {
+	if !stdoutIsTTY() {
+		return false // piped output → use kubectl for script compatibility
+	}
+	if strings.TrimSpace(os.Getenv("KCLI_PLAIN")) == "1" {
+		return false // user explicitly wants kubectl passthrough
+	}
+
+	resourceFound := ""
+	hasSpecificName := false
+	for i, a := range args {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		// Skip flags and their values
+		if a == "-o" || a == "--output" {
+			if i+1 < len(args) {
+				outFmt := strings.TrimSpace(args[i+1])
+				// Only enhance for default table output, not json/yaml/jsonpath/wide etc.
+				if outFmt != "" && outFmt != "table" {
+					return false
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(a, "--output=") || strings.HasPrefix(a, "-o=") || strings.HasPrefix(a, "-o") {
+			val := strings.TrimPrefix(strings.TrimPrefix(a, "--output="), "-o=")
+			if len(a) == 2 { // -o without = (value is next arg)
+				continue
+			}
+			if val == "" { // -owide, -ojson etc
+				val = a[2:]
+			}
+			if val != "" && val != "table" {
+				return false
+			}
+			continue
+		}
+		if a == "-w" || a == "--watch" || a == "--output-watch-events" {
+			return false
+		}
+		if strings.HasPrefix(a, "-") {
+			// skip other flags and their values
+			if (a == "-l" || a == "--selector" || a == "-n" || a == "--namespace" ||
+				a == "--field-selector" || a == "--sort-by" || a == "--chunk-size") && i+1 < len(args) {
+				// these flags consume the next arg
+			}
+			continue
+		}
+		// Non-flag positional arg
+		if resourceFound == "" {
+			resourceFound = strings.ToLower(a)
+		} else {
+			// Second positional = specific resource name (e.g. "pods my-pod")
+			hasSpecificName = true
+		}
+		// Check for type/name format (e.g. "pods/my-pod")
+		if strings.Contains(a, "/") {
+			hasSpecificName = true
+		}
+	}
+
+	if hasSpecificName {
+		return false // specific resource → kubectl describe-like output is better
+	}
+	return enhanceableResources[resourceFound]
+}
+
 // runEnhancedGet handles "kcli get <resource> with <modifiers>" by routing to
 // the kubectl enhancer engine which uses client-go for rich output.
 func (a *app) runEnhancedGet(args []string) error {
@@ -359,21 +446,27 @@ Examples:
 			defer restore()
 
 			// "with" modifier support: kcli get pods with ip,node
-			// Detect if the args contain "with" keyword for enhanced output.
 			if hasWithModifier(clean) {
 				return a.runEnhancedGet(clean)
 			}
 
-			// P1-5: Crash hint annotation — eligible when:
-			//   1. request targets pods with default table output
-			//   2. stdout is an interactive TTY (not piped)
-			//   3. KCLI_HINTS env var is not set to "0"
+			// Enhanced table output: when the user runs a simple list command
+			// on a TTY (e.g. "kcli get pods", "kcli get deployments -A"),
+			// route through the enhanced engine for colored tables with
+			// status icons, responsive columns, and presentation-ready output.
+			// Falls back to kubectl passthrough for piped output, -o json/yaml,
+			// --watch, or specific resource names (pods/my-pod).
+			if shouldUseEnhancedGet(clean) {
+				return a.runEnhancedGet(clean)
+			}
+
+			// P1-5: Crash hint annotation for kubectl passthrough path.
+			// When output goes through kubectl (piped, -o wide, etc.) and
+			// targets pods, append hints for problem statuses.
 			if isCrashHintEligible(clean) &&
 				stdoutIsTTY() &&
 				strings.TrimSpace(os.Getenv("KCLI_HINTS")) != "0" {
-				// Capture kubectl output so we can parse it for problem statuses.
 				tableOut, runErr := a.captureKubectl(append([]string{"get"}, clean...))
-				// Always print the captured output to stdout first.
 				if tableOut != "" {
 					fmt.Print(tableOut)
 					if !strings.HasSuffix(tableOut, "\n") {
@@ -381,7 +474,6 @@ Examples:
 					}
 				}
 				if runErr == nil {
-					// Parse and print hints to stderr (does not affect stdout / scripts).
 					hints := parsePodCrashHints(tableOut)
 					if len(hints) > 0 {
 						printCrashHints(hints, os.Stderr)
