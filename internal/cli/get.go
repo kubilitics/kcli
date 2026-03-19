@@ -34,6 +34,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/tools/clientcmd"
 
 	kubectlpkg "github.com/kubilitics/kcli/internal/kubectl"
 )
@@ -370,7 +371,32 @@ func (a *app) runEnhancedGet(args []string) error {
 		}
 	}
 
+	// CRITICAL: When no namespace is specified and -A is not set, resolve the
+	// default namespace from kubeconfig (just like kubectl does). An empty
+	// namespace string passed to client-go means "all namespaces" which is WRONG
+	// for the default case — users expect current-namespace behavior.
+	if namespace == "" && !allNamespaces {
+		namespace = resolveCurrentNamespace(kubeconfigPath, a.context)
+	}
+
 	return kubectlpkg.EnhancedGet(kubeconfigPath, a.context, namespace, resource, modifiers, allNamespaces, sortBy, outputFormat)
+}
+
+// resolveCurrentNamespace reads the kubeconfig to determine the namespace
+// configured for the current (or overridden) context. Returns "default" if
+// no namespace is set in the kubeconfig context.
+func resolveCurrentNamespace(kubeconfigPath, contextOverride string) string {
+	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfigPath}
+	configOverrides := &clientcmd.ConfigOverrides{}
+	if contextOverride != "" {
+		configOverrides.CurrentContext = contextOverride
+	}
+	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+	ns, _, err := clientConfig.Namespace()
+	if err != nil || ns == "" {
+		return "default"
+	}
+	return ns
 }
 
 // newGetCmd returns a first-class 'get' command with comprehensive help text.
