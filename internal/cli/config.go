@@ -12,13 +12,54 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// kubeconfigSubcommands are kubectl config subcommands that should be routed
+// to kubectl instead of kcli's own config system.
+var kubeconfigSubcommands = map[string]bool{
+	"delete-context":  true,
+	"delete-cluster":  true,
+	"delete-user":     true,
+	"get-contexts":    true,
+	"get-clusters":    true,
+	"get-users":       true,
+	"current-context": true,
+	"use-context":     true,
+	"set-context":     true,
+	"set-cluster":     true,
+	"set-credentials": true,
+	"rename-context":  true,
+	"unset":           true,
+}
+
 func newConfigCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Manage kcli configuration (~/.kcli/config.yaml)",
-		Long:  "Manages kcli settings (view, get, set, reset, edit). For kubeconfig (get-contexts, use-context, set-cluster), use 'kcli kubeconfig' instead.",
+		Long: `Manage kcli settings (view, get, set, reset, edit).
+
+kubectl config operations (delete-context, use-context, get-contexts, etc.)
+are automatically forwarded to kubectl. You can also use 'kcli kubeconfig' explicitly.
+
+Examples:
+  kcli config view                       # show kcli settings
+  kcli config set tui.refresh_interval 3s
+  kcli config edit                       # open in editor
+
+  # These automatically forward to kubectl config:
+  kcli config delete-context my-ctx      # same as kubectl config delete-context
+  kcli config use-context prod           # same as kubectl config use-context
+  kcli config get-contexts               # same as kubectl config get-contexts
+  kcli config current-context            # same as kubectl config current-context`,
 		GroupID: "workflow",
+		// If the first arg is a kubectl config subcommand, route to kubectl
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 && kubeconfigSubcommands[args[0]] {
+				full := append([]string{"config"}, args...)
+				return a.runKubectl(full)
+			}
+			return cmd.Help()
+		},
 	}
+
 	cmd.AddCommand(
 		newConfigViewCmd(),
 		newConfigGetCmd(),
@@ -27,6 +68,22 @@ func newConfigCmd(a *app) *cobra.Command {
 		newConfigEditCmd(),
 		newConfigProfileCmd(a),
 	)
+
+	// Add kubectl config subcommands as pass-through so "kcli config delete-context"
+	// works exactly like "kubectl config delete-context".
+	for subcmd := range kubeconfigSubcommands {
+		subcmd := subcmd // capture
+		cmd.AddCommand(&cobra.Command{
+			Use:                subcmd + " [args...]",
+			Short:              "Kubectl config: " + subcmd + " (pass-through)",
+			DisableFlagParsing: true,
+			RunE: func(_ *cobra.Command, args []string) error {
+				full := append([]string{"config", subcmd}, args...)
+				return a.runKubectl(full)
+			},
+		})
+	}
+
 	return cmd
 }
 

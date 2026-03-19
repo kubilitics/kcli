@@ -126,6 +126,7 @@ func newRootCommand(in io.Reader, out, errOut io.Writer) *cobra.Command {
 		newClusterInfoCmd(a),
 		newAPIResourcesCmd(a),
 		newAPIVersionsCmd(a),
+		newKustomizeCmd(a),
 		// Debugging & auth
 		newDebugCmd(a),
 		newCertificateCmd(a),
@@ -251,7 +252,7 @@ func IsBuiltinFirstArg(name string) bool {
 		// Node operations
 		"drain", "cordon", "uncordon", "taint",
 		// Cluster info
-		"cluster-info", "api-resources", "api-versions",
+		"cluster-info", "api-resources", "api-versions", "kustomize",
 		// Debugging & auth
 		"debug", "events", "certificate", "token", "auth",
 		// Shortcuts

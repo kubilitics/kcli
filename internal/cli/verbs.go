@@ -569,3 +569,30 @@ Examples:
 	}
 }
 
+func newKustomizeCmd(a *app) *cobra.Command {
+	return &cobra.Command{
+		Use:   "kustomize DIR [flags]",
+		Short: "Build a set of KRM resources using a kustomization.yaml file",
+		Long: `Build a set of KRM resources using a 'kustomization.yaml' file.
+
+The DIR argument must be a path to a directory containing 'kustomization.yaml',
+or a git repository URL with a path suffix. If DIR is omitted, '.' is assumed.
+
+Examples:
+  kcli kustomize .                       # build from current directory
+  kcli kustomize ./overlays/production   # build a specific overlay
+  kcli kustomize | kcli apply -f -       # build and apply in one step
+  kcli kustomize --enable-helm           # enable Helm chart inflation`,
+		GroupID:            "core",
+		DisableFlagParsing: true,
+		RunE: func(_ *cobra.Command, rawArgs []string) error {
+			clean, restore, err := a.applyInlineGlobalFlags(rawArgs)
+			if err != nil {
+				return err
+			}
+			defer restore()
+			return a.runKubectl(append([]string{"kustomize"}, clean...))
+		},
+	}
+}
+
