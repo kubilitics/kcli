@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 type Alignment int
@@ -447,12 +448,13 @@ func calculateColumnWidths(cols []Column, rows [][]string, termWidth int) []int 
 	widths := make([]int, len(cols))
 
 	for i, col := range cols {
-		widths[i] = len(col.Name)
+		widths[i] = runewidth.StringWidth(col.Name)
 
 		for _, row := range rows {
 			cell := rowCell(row, col)
-			if len(cell) > widths[i] {
-				widths[i] = len(cell)
+			cellWidth := runewidth.StringWidth(cell)
+			if cellWidth > widths[i] {
+				widths[i] = cellWidth
 			}
 		}
 
@@ -548,11 +550,12 @@ func adaptColumns(cols []Column, width int) []Column {
 }
 
 func padText(text string, width int, align Alignment) string {
-	if len(text) >= width {
+	displayWidth := runewidth.StringWidth(text)
+	if displayWidth >= width {
 		return text
 	}
 
-	padding := width - len(text)
+	padding := width - displayWidth
 
 	switch align {
 	case Right:
@@ -571,7 +574,8 @@ func truncateText(text string, maxWidth int) string {
 		return text
 	}
 
-	if len(text) <= maxWidth {
+	displayWidth := runewidth.StringWidth(text)
+	if displayWidth <= maxWidth {
 		return text
 	}
 
@@ -579,5 +583,15 @@ func truncateText(text string, maxWidth int) string {
 		return strings.Repeat(".", maxWidth)
 	}
 
-	return text[:maxWidth-1] + "…"
+	// Truncate rune-by-rune to respect display width
+	result := []rune(text)
+	w := 0
+	for i, r := range result {
+		rw := runewidth.RuneWidth(r)
+		if w+rw > maxWidth-1 { // -1 for ellipsis
+			return string(result[:i]) + "…"
+		}
+		w += rw
+	}
+	return text
 }
