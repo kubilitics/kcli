@@ -343,9 +343,12 @@ func (a *app) buildActionArgs(resourceType, name, namespace, action string, acti
 	case "e":
 		return append([]string{"edit", resourceRef}, nsArgs...)
 	case "x":
-		return append([]string{"exec", "-it", name, "--", "sh"}, nsArgs...)
+		// namespace must come BEFORE "--" (everything after is the container command)
+		args := append([]string{"exec", "-it"}, nsArgs...)
+		return append(args, name, "--", "sh")
 	case "p":
-		return append([]string{"port-forward", resourceRef, "8080:80"}, nsArgs...)
+		args := append([]string{"port-forward"}, nsArgs...)
+		return append(args, resourceRef, "8080:80")
 	case "del":
 		return append([]string{"delete", resourceRef}, nsArgs...)
 	case "s":
