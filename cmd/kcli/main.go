@@ -36,6 +36,9 @@ func main() {
 	// diagnostic (KCLI_DEBUG_STARTUP=1) can report accurate latency.
 	cli.SetProcessStart(procStart)
 
+	// Auto-install shell completion on first run (silent, one-time).
+	cli.EnsureShellCompletion()
+
 	args := os.Args[1:]
 	handled, err := plugin.TryRunForArgs(args, cli.IsBuiltinFirstArg)
 	if err != nil {
