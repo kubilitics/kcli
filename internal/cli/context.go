@@ -9,9 +9,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kubilitics/kcli/internal/k8sclient"
-	"github.com/kubilitics/kcli/internal/state"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+
+	"github.com/kubilitics/kcli/internal/k8sclient"
+	"github.com/kubilitics/kcli/internal/output"
+	"github.com/kubilitics/kcli/internal/state"
 )
 
 // kubeconfig view output for context extraction
@@ -671,22 +674,55 @@ func printContexts(a *app, s *state.Store, onlyFavorites bool) error {
 		favorites[v] = struct{}{}
 	}
 	sort.Strings(ctxs)
+
+	table := output.NewTable()
+	table.Style = output.Rounded
+	table.AutoNumber = true
+	table.AddColumn(output.Column{
+		Name: "#", Priority: output.PriorityAlways, MinWidth: 3, MaxWidth: 5, Align: output.Right,
+		ColorFunc: func(string) lipgloss.Style { return output.GetTheme().Muted },
+	})
+	table.AddColumn(output.Column{
+		Name: "", Priority: output.PriorityAlways, MinWidth: 1, MaxWidth: 2, Align: output.Left,
+		ColorFunc: func(v string) lipgloss.Style {
+			if v == "▶" {
+				return output.GetTheme().Success
+			}
+			return lipgloss.NewStyle()
+		},
+	})
+	table.AddColumn(output.Column{
+		Name: "CONTEXT", Priority: output.PriorityAlways, MinWidth: 20, MaxWidth: 55, Align: output.Left,
+		ColorFunc: func(string) lipgloss.Style { return output.GetTheme().Primary },
+	})
+	table.AddColumn(output.Column{
+		Name: "FAV", Priority: output.PrioritySecondary, MinWidth: 3, MaxWidth: 5, Align: output.Left,
+		ColorFunc: func(v string) lipgloss.Style {
+			if v == "★" {
+				return output.GetTheme().Warning
+			}
+			return lipgloss.NewStyle()
+		},
+	})
+
 	for _, c := range ctxs {
 		if onlyFavorites {
 			if _, ok := favorites[c]; !ok {
 				continue
 			}
 		}
-		prefix := "  "
+		marker := ""
 		if c == current {
-			prefix = "* "
+			marker = "▶"
 		}
 		fav := ""
 		if _, ok := favorites[c]; ok {
-			fav = " [fav]"
+			fav = "★"
 		}
-		fmt.Printf("%s%s%s\n", prefix, c, fav)
+		table.AddRow([]string{marker, c, fav})
 	}
+
+	table.Print()
 	return nil
 }
 

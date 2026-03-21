@@ -86,11 +86,8 @@ func (t *Table) AddRow(row []string) {
 	defer t.mu.Unlock()
 	// If AutoNumber is enabled, prepend an empty placeholder for the # column.
 	// The actual number is populated during Render().
-	if t.AutoNumber && (len(row) == 0 || row[0] != "") {
-		// Check if the first column is the auto-num column
-		if len(t.Columns) > 0 && t.Columns[0].isAutoNum {
-			row = append([]string{""}, row...)
-		}
+	if t.AutoNumber && len(t.Columns) > 0 && t.Columns[0].Name == "#" {
+		row = append([]string{""}, row...)
 	}
 	t.Rows = append(t.Rows, row)
 }
@@ -118,7 +115,7 @@ func (t *Table) Render(width int) string {
 	if t.AutoNumber {
 		numColIdx := -1
 		for i, col := range t.Columns {
-			if col.isAutoNum {
+			if col.Name == "#" {
 				numColIdx = i
 				break
 			}

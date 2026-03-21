@@ -1,12 +1,19 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 
-	"github.com/kubilitics/kcli/internal/state"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+
+	"github.com/kubilitics/kcli/internal/k8sclient"
+	"github.com/kubilitics/kcli/internal/output"
+	"github.com/kubilitics/kcli/internal/state"
 )
 
 func newNamespaceCmd(a *app) *cobra.Command {
@@ -281,49 +288,119 @@ func newNamespaceFavCmd(a *app) *cobra.Command {
 }
 
 func printNamespaces(a *app, cmd *cobra.Command, listOnly bool) error {
-	out, err := a.captureKubectl([]string{"get", "namespaces", "-o", "name"})
-	if err != nil {
-		if listOnly {
-			return err
-		}
-		// Fallback to current namespace only when listing namespaces fails.
-		out, err = a.captureKubectl([]string{"config", "view", "--minify", "-o", "jsonpath={..namespace}"})
+	// For --list mode, keep simple output for scripting
+	if listOnly {
+		out, err := a.captureKubectl([]string{"get", "namespaces", "-o", "name"})
 		if err != nil {
 			return err
 		}
-		ns := strings.TrimSpace(out)
-		if ns == "" {
-			ns = "default"
+		for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+			l = strings.TrimPrefix(strings.TrimSpace(l), "namespace/")
+			if l != "" {
+				fmt.Fprintln(cmd.OutOrStdout(), l)
+			}
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), ns)
 		return nil
 	}
-	current, err := currentNamespace(a)
+
+	// Use client-go for rich table output
+	bundle, err := k8sclient.NewBundle(a.kubeconfig, a.context)
 	if err != nil {
-		return err
+		// Fallback to kubectl
+		return printNamespacesFallback(a, cmd)
 	}
-	if current == "" {
-		current = "default"
+	clientset, ok := bundle.Clientset.(kubernetes.Interface)
+	if !ok {
+		return printNamespacesFallback(a, cmd)
 	}
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	namespaces := make([]string, 0, len(lines))
-	for _, l := range lines {
+
+	nsList, err := clientset.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return printNamespacesFallback(a, cmd)
+	}
+
+	current, _ := currentNamespace(a)
+
+	table := output.NewTable()
+	table.Style = output.Rounded
+	table.AutoNumber = true
+	// # column
+	table.AddColumn(output.Column{
+		Name: "#", Priority: output.PriorityAlways, MinWidth: 3, MaxWidth: 5, Align: output.Right,
+		ColorFunc: func(string) lipgloss.Style { return output.GetTheme().Muted },
+		// isAutoNum not exported, but AutoNumber + first column with "#" name triggers auto-numbering
+	})
+	table.AddColumn(output.Column{
+		Name: "", Priority: output.PriorityAlways, MinWidth: 1, MaxWidth: 2, Align: output.Left,
+		ColorFunc: func(v string) lipgloss.Style {
+			if v == "▶" {
+				return output.GetTheme().Success
+			}
+			return lipgloss.NewStyle()
+		},
+	})
+	table.AddColumn(output.Column{
+		Name: "NAMESPACE", Priority: output.PriorityAlways, MinWidth: 15, MaxWidth: 40, Align: output.Left,
+		ColorFunc: func(string) lipgloss.Style { return output.GetTheme().Primary },
+	})
+	table.AddColumn(output.Column{
+		Name: "STATUS", Priority: output.PriorityCritical, MinWidth: 10, MaxWidth: 15, Align: output.Left,
+		ColorFunc: output.StatusColorFunc(""),
+	})
+	table.AddColumn(output.Column{
+		Name: "AGE", Priority: output.PriorityContext, MinWidth: 8, MaxWidth: 15, Align: output.Left,
+		ColorFunc: output.AgeColorFunc(),
+	})
+
+	// Sort: current namespace first, then alphabetical
+	items := nsList.Items
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Name == current {
+			return true
+		}
+		if items[j].Name == current {
+			return false
+		}
+		return items[i].Name < items[j].Name
+	})
+
+	for _, ns := range items {
+		marker := ""
+		if ns.Name == current {
+			marker = "▶"
+		}
+		table.AddRow([]string{
+			marker,
+			ns.Name,
+			output.FormatStatus(string(ns.Status.Phase)),
+			output.FormatAge(ns.CreationTimestamp.Time),
+		})
+	}
+
+	table.Print()
+	return nil
+}
+
+func printNamespacesFallback(a *app, cmd *cobra.Command) error {
+	out, err := a.captureKubectl([]string{"get", "namespaces", "-o", "name"})
+	if err != nil {
+		cur, err2 := currentNamespace(a)
+		if err2 != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), cur)
+		return nil
+	}
+	current, _ := currentNamespace(a)
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
 		l = strings.TrimPrefix(strings.TrimSpace(l), "namespace/")
 		if l != "" {
-			namespaces = append(namespaces, l)
+			prefix := "  "
+			if l == current {
+				prefix = "* "
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s%s\n", prefix, l)
 		}
-	}
-	sort.Strings(namespaces)
-	if len(namespaces) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), current)
-		return nil
-	}
-	for _, ns := range namespaces {
-		prefix := "  "
-		if ns == current {
-			prefix = "* "
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s%s\n", prefix, ns)
 	}
 	return nil
 }
